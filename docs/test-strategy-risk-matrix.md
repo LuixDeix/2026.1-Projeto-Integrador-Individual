@@ -1,0 +1,14 @@
+# (1.3) Matriz de Riscos — Estratégia de Testes
+
+
+## Mapeamento UC → Risco
+
+| # | UC · Fluxo (A1.3) | Risco concreto e quantificável |
+|---|-------------------|-------------------------------|
+| 1 | **UC-01** · FP Passo 4 — validação DHT22 | A função de validação pode aceitar `84.9 °C` como leitura legítima porque o sentinel de curto do DHT22 é `85.0 °C` exato; um off-by-one no operador (`< 85` em vez de `<= 84`) deixa passar dado fisicamente impossível, que é persistido no InfluxDB e polui o histórico sem alarme |
+| 2 | **UC-01** · FE-01-B — buffer circular NVS | O buffer aceita 100 entradas (~12,8 KB); na entrada 101 deve descartar a mais antiga (FIFO) e setar `buffer_overflow: true`; se o índice de escrita não fizer wraparound corretamente, a entrada 101 sobrescreve a posição 0 sem setar o flag, e o receptor do lote (`POST /batch`) recebe dados fora de ordem sem saber que houve perda |
+| 3 | **UC-01** · FP Passos 7–10 — persistência + streaming | O servidor pode gravar a leitura no InfluxDB com sucesso (`HTTP 201`) e falhar silenciosamente na publicação WebSocket — sem log de erro — porque o evento de socket é disparado em callback assíncrono não aguardado com `await`; o dashboard fica desatualizado e nenhum alerta é gerado |
+| 4 | **UC-02** · FP Passos 9–11 — timeout de ACK do comando MQTT | O servidor publica `IRRIGATE` e aguarda `{"state": "IRRIGATING"}` por 8 s; se o broker entregar com latência de 9 s (fila com mensagens QoS 1 retidas de sessão anterior), o servidor registra `COMMAND_TIMEOUT` e bloqueia o botão por 30 s — mesmo que o relé tenha sido acionado corretamente 1 s depois |
+| 5 | **UC-02** · FE-02-B — detecção de falha no atuador | O ESP32 detecta falha na bomba lendo corrente do ACS712: falha = corrente < 0,1 A após 500 ms; se a conversão ADC→amperes usar a constante errada (66 mV/A do modelo 20A em vez de 185 mV/A do 5A), uma bomba consumindo 0,08 A é lida como 0,28 A e classificada como saudável; o relé fica ativo com bomba sem água |
+| 6 | **UC-03** · FP Passo 2 — motor de regras com sensor nulo | O motor avalia `umidade_solo < 30` quando o campo chega como `null`; em JavaScript, `null < 30` é `false` — a regra não dispara irrigação (resultado acidentalmente correto), mas `RULE_SKIPPED` não é gerado e auditoria fica cega para o período de falha do sensor |
+| 7 | **UC-03** · FA-03-B — conflito de prioridade entre regras | Quando Regra #7 (`priority: 1`) e Regra #9 (`priority: 2`) são satisfeitas pelo mesmo payload, o motor deve executar a #7; se `.sort()` for usado sem comparador explícito, o V8 ordena por string — `priority: 10` vem antes de `priority: 2` — e a regra errada é executada |
