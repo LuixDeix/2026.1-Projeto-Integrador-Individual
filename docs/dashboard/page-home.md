@@ -86,7 +86,7 @@ Começar por Configurações produziria componentes de CRUD usados apenas lá. A
 
 **Arquivo:** `docs/dashboard/wireframes/home-v1.png`
 
-```
+```.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  [🌱 Logo]   HOME • HISTÓRICO • CRESCIMENTO • SENSORES        [🔔] [Offline] │
 ├──────────────────────────────────────────────────────────────────────────┤
