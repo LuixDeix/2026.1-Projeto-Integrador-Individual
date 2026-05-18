@@ -81,8 +81,13 @@ Começar por Configurações produziria componentes de CRUD usados apenas lá. A
 ---
 
 ## 4. Wireframe da versão implementada
-
 > O wireframe reflete **exatamente** o que está sendo implementado.
+
+O wireframe original definido na RFC foi mantido como referência de planejamento e base conceitual da interface.
+
+A versão apresentada nesta seção reflete a implementação real da A1.7, incorporando ajustes feitos durante o desenvolvimento para melhorar usabilidade, hierarquia visual e organização dos componentes.
+
+
 
 **Arquivo:** `docs/dashboard/wireframes/home-v1.png`
 
@@ -137,19 +142,31 @@ Começar por Configurações produziria componentes de CRUD usados apenas lá. A
 
 ---
 
+### 4.1 Diferença entre wireframe original e implementado
+
+O wireframe original definido na RFC priorizava separação modular entre blocos independentes.
+
+A versão implementada na A1.7 realizou ajustes com foco em usabilidade:
+
+- Consolidação dos painéis laterais (Alertas, Status e Ação Rápida)
+- Redução de elementos redundantes
+- Reorganização da hierarquia visual
+- Maior destaque para o gráfico de tendências
+
+Motivo: melhorar escaneabilidade e reduzir carga cognitiva do usuário durante o monitoramento em tempo real.
+
 ## 5. Estados visuais cobertos
 
 Os 4 estados obrigatórios da A1.7 estão marcados com ✅. Os demais são específicos do domínio da Home.
 
-| # | Estado | O que aparece para o usuário |
-| --- | --- | --- |
-| ✅ 1 | **Carregando** | Skeleton loader nos 3 cards de métrica e no gráfico; spinner no header com "Atualizando..."; painéis de alerta e status com placeholder cinza |
-| ✅ 2 | **Sucesso (dados completos)** | Todos os gauges preenchidos com valores realistas, gráfico multisérie renderizado, alertas listados por severidade, status Online/Conectado |
-| ✅ 3 | **Erro de fetch** | Banner não-bloqueante no topo: "Não foi possível atualizar os dados. Última leitura: 12:30:45" com botão "Tentar novamente"; badge "Offline" ativo no header; valores anteriores permanecem visíveis em cinza |
-| ✅ 4 | **Dado vazio / parcial** | Sensor com falha exibe `--` no gauge com badge vermelho "Sem leitura"; gráfico renderiza apenas as séries disponíveis, marcando a ausente com tracejado e tooltip "Sensor sem resposta"; demais cards funcionam normalmente |
-| 5 | **Alerta crítico ativo** | AlertCard com borda vermelha e ícone de perigo; sem modal bloqueante — o usuário continua operando o dashboard |
-| 6 | **Irrigação em andamento** | Botão muda para "Irrigando... (45s)" com contagem regressiva; input de duração desabilitado; Status da Bomba atualiza para "Bomba ligada" em verde |
-
+| #    | Estado          |      O que aparece para o usuário                                       |
+| -----| ----------------| ------------------------------------------------------------------------|
+| ✅ 1 | **Carregando**   | Skeleton loader nos cards de métrica e no gráfico; spinner no header com "Atualizando..."; painéis com placeholder cinza |
+| ✅ 2 | **Sucesso (dados completos)** | Gauges preenchidos, gráfico multisérie renderizado, alertas exibidos por severidade, status Online |
+| ✅ 3 | **Erro de fetch** | Banner no topo: "Não foi possível atualizar os dados" + botão "Tentar novamente"; dados anteriores permanecem visíveis com opacidade reduzida |
+| ✅ 4 | **Dado vazio / parcial** | Sensor sem leitura exibe `--` no card com badge vermelho; gráfico mostra apenas séries disponíveis |
+| 5 | **Alerta crítico ativo** | Card com borda vermelha e ícone de alerta; não bloqueia interação |
+| 6 | **Irrigação em andamento** | Botão muda para "Irrigando..."; contador regressivo; ação desabilitada até finalizar |
 ---
 
 ## 6. Estrutura de mock
@@ -224,3 +241,20 @@ Itens já definidos na RFC são referenciados. Itens novos são documentados aqu
 - [ ] Review aprovado por outro membro (sem self-merge)
 - [ ] Tag `v0.1.0-dashboard` criada no Git
 - [ ] `docs/releases/release-1.md` preenchido com rastreabilidade
+- [ ] Estados controlados via lógica na Home (loading, error, vazio, offline)
+- [ ] Estrutura preparada para alternância entre mock e API via variável de ambiente
+
+
+## 10. Limitações conhecidas (v1)
+
+- Dados ainda simulados (mock local)
+- Sem integração real com WebSocket (Socket.IO entra na A1.8)
+- Ação de irrigação não integrada ao hardware
+- Histórico não persistido
+
+Essas limitações serão resolvidas na próxima entrega (A1.8).
+
+
+## 11. Conclusão
+
+A implementação da Home valida os principais riscos técnicos do sistema (tempo real, estados de falha e ação de escrita), estabelece o padrão visual e de componentes reutilizáveis e prepara a base para integração com backend real na A1.8 sem refatoração da camada de UI.
