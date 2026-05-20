@@ -2,7 +2,7 @@
 
 **Data:** 20 de Maio de 2026  
 **Status:** Auditada e Homologada  
-**Commit de Origem:** `git rev-parse v0.1.0-dashboard`
+**Commit de Origem:** `[release] release-1.md`
 
 ## 1. Escopo da Release
 
