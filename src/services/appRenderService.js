@@ -1,48 +1,3 @@
-export function gerarHistoricoTemporal() {
-  const pontos = [];
-  const totalPontos = 720;
-  let umidadeSoloAtual = 65.0; 
-  let irrigacaoAtiva = false;
-  let tempoIrrigando = 0;
-
-  for (let i = 0; i <= totalPontos; i++) {
-    const progressoDia = (i / totalPontos) * 2 * Math.PI;
-    const luzBase = Math.sin(progressoDia - Math.PI / 2);
-    let lux = Math.max(0, parseFloat((luzBase * 5000 + 4500).toFixed(0)));
-    const taxaSecagem = 0.04 + (lux / 10000) * 0.14;
-
-    if (irrigacaoAtiva) {
-      umidadeSoloAtual += 2.0;
-      tempoIrrigando += 2;
-      if (umidadeSoloAtual >= 75.0 || tempoIrrigando >= 20) { 
-        irrigacaoAtiva = false; 
-      }
-    } else {
-      umidadeSoloAtual -= taxaSecagem;
-      if (umidadeSoloAtual <= 50.0) {
-        irrigacaoAtiva = true;
-        tempoIrrigando = 0;
-      }
-    }
-
-    umidadeSoloAtual = Math.min(100, Math.max(0, parseFloat(umidadeSoloAtual.toFixed(1))));
-    const minutosTotais = i * 2;
-    const horas = Math.floor(minutosTotais / 60).toString().padStart(2, '0');
-    const minutos = (minutosTotais % 60).toString().padStart(2, '0');
-
-    pontos.push({
-      horario: `${horas}:${minutos}`,
-      temperatura_c: parseFloat((Math.sin(progressoDia - Math.PI / 1.6) * 6 + 24).toFixed(1)),
-      luminosidade_lux: lux,
-      umidade_ar_pct: parseFloat((80 - (luzBase * 20)).toFixed(1)),
-      umidade_solo_pct: umidadeSoloAtual,
-      irrigacao_ativa: irrigacaoAtiva,
-      bateria_pct: parseFloat((60 + (luzBase * 40)).toFixed(0))
-    });
-  }
-  return pontos;
-}
-
 export function renderNavbar(cenarioAtual) {
   const isOffline = cenarioAtual === 'offline';
   return `
@@ -95,9 +50,6 @@ export function renderCardSensor(titulo, valor, unidade, estadoCard, descricaoSt
     </div>`;
 }
 
-/**
- * Renderiza os Paineis Laterais de Status, Alertas e Ações do Wireframe
- */
 export function renderSidePanels(dados, cenarioAtual, bombaManualAtiva) {
   const isOffline = cenarioAtual === 'offline';
   const modoBombaAtivo = isOffline ? false : (dados.irrigacao_ativa || bombaManualAtiva);

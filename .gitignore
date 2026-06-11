@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Node / Frontend
+node_modules/
+.env
+dist/
+build/
