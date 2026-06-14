@@ -1,232 +1,451 @@
-import { 
-  gerarHistoricoTemporal, 
-  renderNavbar, 
-  renderCardSensor, 
-  renderSidePanels, 
-  renderControlesTeste 
-} from './appRenderService.js';
+import { renderNavbar } from './appRenderService.js';
+import { gerarLayoutDashboard } from './dashboardViewService.js';
+import { inicializarGraficoAnalitico } from './chartService.js';
+import { buscarDadosDispositivo } from './apiService.js';
+import {
+  carregarCacheSnapshot,
+  carregarSessaoLocal,
+  salvarSessaoLocal,
+  toCachedResponse,
+} from './cacheService.js';
+import { obterTelemetriaMockada, obterHistoricoMockado } from './mockService.js';
+import { sanitizarEntradaData, sanitizarDuracaoIrrigacao } from './cardHelpers.js';
 
-let cenarioAtual = 'normal';
-let simularErroConexao = false;
-let filtroPeriodoHoras = 24; 
-let bombaManualAtiva = false;
-let historicoCompleto = gerarHistoricoTemporal();
-let pontoSelecionado = null; 
+const JANELA_PADRAO_HORAS = 48;
+
+let estadoApp = {
+  cenarioAtual: 'offline',
+  filtroDataAtivo: false,
+  filtrosVisibilidade: {
+    umid_solo: true, umid_ar: true, temp: true, luz: true, ph: true,
+    chuva: true, alerta: true, irrigacao: true
+  },
+  configAgrupamento: { unidade: 'minuto', fator: 1 },
+  configData: {
+    inicio: '',
+    fim: '',
+    fimControleManual: false
+  },
+  limitesData: { min: '', max: '' },
+  telemetriaAtual: null,
+  telemetriaAnterior: null,          // Passo 4 — base para cálculo de delta
+  dadosGraficoTimelineBrutos: [],
+  dadosGraficoTimelineAgrupados: [],
+  pontoSelecionado: null,
+  timestampInicio: Date.now(),        // Passo 7 — base para cálculo de uptime
+  ultimoComando: null,                // Passo 7 — último comando enviado
+  logErros: [],                       // Passo 9 — log acumulado (máx. 20 entradas)
+  duracaoIrrigacaoSeg: 60,            // Passo 8 — duração de irrigação configurável
+  fetchedAt: null,
+};
+
 let chartInstance = null;
-let temporizadorRealtime = null;
+let agendadorTimeout = null;
+let estaCarregando = false;
 
-const navContainer = document.getElementById('nav-container');
-const appContainer = document.getElementById('app-container');
-
-function obterPontosFiltrados() {
-  const agora = new Date();
-  const horas = agora.getHours();
-  const minutos = agora.getMinutes();
-  
-  const minutosTotaisDoDia = (horas * 60) + minutos;
-  let indiceMaximo = Math.floor(minutosTotaisDoDia / 2);
-  
-  if (indiceMaximo >= historicoCompleto.length) {
-    indiceMaximo = historicoCompleto.length - 1;
-  }
-  
-  const pontosAteAgora = historicoCompleto.slice(0, indiceMaximo + 1);
-  const pontosAExibir = (filtroPeriodoHoras * 30); 
-  
-  if (pontosAteAgora.length > pontosAExibir) {
-    return pontosAteAgora.slice(pontosAteAgora.length - pontosAExibir);
-  }
-  return pontosAteAgora;
+/**
+ * Passo 9 — Adiciona entrada ao log de erros/eventos acumulado.
+ * Mantém máximo de 20 entradas (mais recentes no topo).
+ * ISO 27002 8.16: rastreabilidade de ações no sistema.
+ *
+ * @param {'ERR'|'WARN'|'OK'|'CMD'} nivel
+ * @param {string} mensagem
+ */
+function adicionarLogErro(nivel, mensagem) {
+  const timestamp = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+  estadoApp.logErros.unshift({ nivel, mensagem, timestamp });
+  if (estadoApp.logErros.length > 20) estadoApp.logErros.pop();
+  persistirSessaoLocal();
 }
 
-async function processarCicloUI() {
-  const pontosDisponiveis = obterPontosFiltrados();
-  const ultimoPontoRealtime = pontosDisponiveis[pontosDisponiveis.length - 1] || historicoCompleto[0];
+function persistirSessaoLocal() {
+  salvarSessaoLocal({
+    timestampInicio: estadoApp.timestampInicio,
+    logErros: estadoApp.logErros,
+    filtrosVisibilidade: estadoApp.filtrosVisibilidade,
+    configAgrupamento: estadoApp.configAgrupamento,
+    filtroDataAtivo: estadoApp.filtroDataAtivo,
+    configData: estadoApp.configData,
+    duracaoIrrigacaoSeg: estadoApp.duracaoIrrigacaoSeg,
+    ultimoComando: estadoApp.ultimoComando,
+  });
+}
 
-  if (!pontoSelecionado || !pontosDisponiveis.some(p => p.horario === pontoSelecionado.horario)) {
-    pontoSelecionado = ultimoPontoRealtime;
+function restaurarSessaoLocal() {
+  const sessao = carregarSessaoLocal();
+  if (!sessao) return;
+  if (sessao.timestampInicio) estadoApp.timestampInicio = sessao.timestampInicio;
+  if (Array.isArray(sessao.logErros)) estadoApp.logErros = sessao.logErros;
+  if (sessao.filtrosVisibilidade) estadoApp.filtrosVisibilidade = sessao.filtrosVisibilidade;
+  if (sessao.configAgrupamento) estadoApp.configAgrupamento = sessao.configAgrupamento;
+  if (typeof sessao.filtroDataAtivo === 'boolean') estadoApp.filtroDataAtivo = sessao.filtroDataAtivo;
+  if (sessao.configData) estadoApp.configData = { ...estadoApp.configData, ...sessao.configData };
+  if (sessao.duracaoIrrigacaoSeg) estadoApp.duracaoIrrigacaoSeg = sessao.duracaoIrrigacaoSeg;
+  if (sessao.ultimoComando) estadoApp.ultimoComando = sessao.ultimoComando;
+}
+
+function aplicarPayloadNoEstado(payload) {
+  estadoApp.telemetriaAnterior = estadoApp.telemetriaAtual;
+  estadoApp.cenarioAtual = payload.cenario || 'offline';
+  estadoApp.telemetriaAtual = payload.telemetria;
+  estadoApp.dadosGraficoTimelineBrutos = payload.historico || [];
+  estadoApp.fetchedAt = payload.fetchedAt ?? null;
+}
+
+function comandoBloqueado() {
+  return estadoApp.cenarioAtual === 'offline' || estadoApp.cenarioAtual.endsWith('-cached');
+}
+
+const navContainer  = document.getElementById('nav-container');
+const appContainer  = document.getElementById('app-container');
+
+function converterStringBrParaDate(stringBr) {
+  try {
+    if (!stringBr || !stringBr.includes('/')) return new Date();
+    const partes = stringBr.trim().split(' ');
+    const [dia, mes, ano] = partes[0].split('/').map(Number);
+    const [hora, min]     = (partes[1] || '00:00').split(':').map(Number);
+    return new Date(ano || 2026, mes - 1, dia, hora || 0, min || 0, 0);
+  } catch { return new Date(); }
+}
+
+function formatarDateParaStringBr(d) {
+  if (!d || isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function parsearDataHora(valor) {
+  if (!valor) return NaN;
+  if (typeof valor === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(valor))
+      return new Date(valor + ':00-03:00').getTime();
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(valor))
+      return new Date(valor.replace(' ', 'T') + '-03:00').getTime();
+    if (/^\d{2}\/\d{2}\/\d{4}/.test(valor))
+      return converterStringBrParaDate(valor).getTime();
+    if (/^\d{4}\/\d{2}\/\d{2}/.test(valor))
+      return new Date(valor.replace(/\//g, '-').replace(' ', 'T')).getTime();
+  }
+  return new Date(valor).getTime();
+}
+
+async function atualizarEstadoDados() {
+  if (estaCarregando) return;
+  estaCarregando = true;
+
+  try {
+    const payload = await buscarDadosDispositivo();
+
+    aplicarPayloadNoEstado(payload);
+
+    if (!estadoApp.dadosGraficoTimelineBrutos?.length) {
+      adicionarLogErro('WARN', 'Histórico vazio — usando mock local');
+      estadoApp.dadosGraficoTimelineBrutos = obterHistoricoMockado();
+      estadoApp.cenarioAtual = 'offline';
+      estadoApp.fetchedAt = null;
+    }
+    if (!estadoApp.telemetriaAtual) {
+      estadoApp.telemetriaAtual = obterTelemetriaMockada();
+    }
+
+    const origem = payload.fromCache ? 'cache' : 'rede';
+    adicionarLogErro('OK', `${estadoApp.dadosGraficoTimelineBrutos.length} registros | ${estadoApp.cenarioAtual} (${origem})`);
+
+  } catch (err) {
+    adicionarLogErro('ERR', `Falha na API: ${err.message}`);
+    const cached = await carregarCacheSnapshot();
+    if (cached) {
+      aplicarPayloadNoEstado(toCachedResponse(cached));
+      adicionarLogErro('WARN', 'Recuperado do cache local após erro');
+    } else {
+      estadoApp.cenarioAtual = 'offline';
+      estadoApp.fetchedAt = null;
+      estadoApp.dadosGraficoTimelineBrutos = obterHistoricoMockado();
+      estadoApp.telemetriaAtual = obterTelemetriaMockada();
+    }
+  } finally {
+    estaCarregando = false;
   }
 
-  navContainer.innerHTML = renderNavbar(cenarioAtual);
+  const agora = new Date();
+  estadoApp.limitesData.max = formatarDateParaStringBr(agora);
+  if (!estadoApp.configData.fimControleManual) {
+    estadoApp.configData.fim = estadoApp.limitesData.max;
+  }
 
-  if (simularErroConexao) {
-    renderizarTelaErro();
+  processarAgrupamentoETempo();
+}
+
+function processarAgrupamentoETempo() {
+  const brutos = estadoApp.dadosGraficoTimelineBrutos;
+  if (!brutos?.length) return;
+
+  let filtrados;
+
+  if (estadoApp.filtroDataAtivo && estadoApp.configData.inicio) {
+    const ini = parsearDataHora(estadoApp.configData.inicio);
+    const fim = estadoApp.configData.fimControleManual
+      ? parsearDataHora(estadoApp.configData.fim)
+      : Date.now();
+    filtrados = brutos.filter(p => {
+      const ts = parsearDataHora(p.dataHora);
+      return !isNaN(ts) && ts >= ini && ts <= fim;
+    });
+    console.log(`🔍 Filtro manual: ${filtrados.length} pontos`);
+  } else {
+    const corte = Date.now() - JANELA_PADRAO_HORAS * 60 * 60 * 1000;
+    filtrados = brutos.filter(p => {
+      const ts = parsearDataHora(p.dataHora);
+      return !isNaN(ts) && ts >= corte;
+    });
+    console.log(`📊 Janela ${JANELA_PADRAO_HORAS}h: ${filtrados.length} pontos`);
+  }
+
+  if (!filtrados.length) {
+    console.warn('⚠️ Nenhum ponto no intervalo. Amostra:', brutos[0]?.dataHora);
+    estadoApp.dadosGraficoTimelineAgrupados = [];
     return;
   }
 
-  renderizarDashboardCompleto(ultimoPontoRealtime);
-  inicializarGrafico(pontosDisponiveis);
+  const factor = parseInt(estadoApp.configAgrupamento.fator) || 1;
+  const unit   = estadoApp.configAgrupamento.unidade;
+  const buckets = {};
+
+  filtrados.forEach(p => {
+    const dt = new Date(parsearDataHora(p.dataHora));
+    if (unit === 'minuto')      dt.setMinutes(Math.floor(dt.getMinutes() / factor) * factor, 0, 0);
+    else if (unit === 'hora')   dt.setHours(Math.floor(dt.getHours() / factor) * factor, 0, 0, 0);
+    else if (unit === 'dia')    dt.setHours(0, 0, 0, 0);
+    else                        dt.setMinutes(Math.floor(dt.getMinutes() / factor) * factor, 0, 0);
+    const k = dt.toISOString();
+    if (!buckets[k]) buckets[k] = [];
+    buckets[k].push(p);
+  });
+
+  estadoApp.dadosGraficoTimelineAgrupados = Object.keys(buckets).sort().map(chave => {
+    const lista  = buckets[chave];
+    const total  = lista.length;
+    const dt     = new Date(chave);
+    const soma   = lista.reduce((a, c) => ({
+      s: a.s + (c.umidadeSoloPorcentagem || 0),
+      ar: a.ar + (c.umidadeAr || 0),
+      t: a.t + (c.temperatura || 0),
+      l: a.l + (c.luzSolar || 0),
+      p: a.p + (c.pHSolo || 7),
+    }), { s:0, ar:0, t:0, l:0, p:0 });
+
+    return {
+      dataHora:              `${dt.toLocaleDateString('pt-BR')} ${dt.toLocaleTimeString('pt-BR', { hour12: false })}`,
+      umidadeSoloPorcentagem: parseFloat((soma.s  / total).toFixed(1)),
+      umidadeAr:              parseFloat((soma.ar / total).toFixed(1)),
+      temperatura:            parseFloat((soma.t  / total).toFixed(1)),
+      luzSolar:               parseFloat((soma.l  / total).toFixed(1)),
+      pHSolo:                 parseFloat((soma.p  / total).toFixed(2)),
+      estaChovendo:           lista[0]?.estaChovendo        || false,
+      statusIrrigacao:        lista[0]?.statusIrrigacao     || 'DESLIGADO',
+      vazaoGotejamentoLh:     lista[0]?.vazaoGotejamentoLh  || 0,
+      controleManualAtivo:    lista[0]?.controleManualAtivo || false,
+      estacao:                lista[0]?.estacao             || '---',
+      condicaoCeu:            lista[0]?.condicaoCeu         || '---',
+    };
+  });
+
+  console.log(`✅ ${estadoApp.dadosGraficoTimelineAgrupados.length} buckets gerados`);
 }
 
-function renderizarTelaErro() {
-  appContainer.innerHTML = `
-    <div class="bg-red-950/20 border border-red-900/40 p-5 rounded-lg shadow-xl mt-4">
-      <h3 class="text-red-400 font-mono font-bold text-sm flex items-center gap-2">⚠️ Uncaught SyntaxError: HTTP Request Failure</h3>
-      <p class="text-slate-400 font-mono text-xs mt-1">O endpoint de telemetria falhou em retornar o payload JSON.</p>
-      <button id="btn-retry" class="mt-3 px-3 py-1 bg-red-900 hover:bg-red-800 border border-red-700 text-red-200 font-mono text-xs rounded transition-colors">Retry Connection</button>
-    </div>
-    <div class="mt-4">${renderControlesTeste(cenarioAtual, simularErroConexao)}</div>`;
-  vincularEventos();
+function sincronizarPontoSelecionado(p) {
+  estadoApp.pontoSelecionado = {
+    horario:           p.dataHora?.split(' ')[1] ?? '--:--:--',
+    temperatura_c:     p.temperatura     ?? p.temperaturaCelsius ?? 0,
+    luminosidade_lux:  p.luzSolar        ?? 0,
+    umidade_ar_pct:    p.umidadeAr       ?? 0,
+    umidade_solo_pct:  p.umidadeSoloPorcentagem ?? 0,
+    irrigacao_ativa:   p.statusIrrigacao === 'LIGADO',
+    ph_solo:           p.pHSolo          || 7,
+    vazao_gotejamento: p.vazaoGotejamentoLh || 0,
+    controle_manual:   p.controleManualAtivo || false,
+    estacao:           p.estacao         || '---',
+    condicao_ceu:      p.condicaoCeu     || '---',
+  };
 }
 
-function renderizarDashboardCompleto(ultimoPontoRealtime) {
-  const isOffline = cenarioAtual === 'offline';
-  const dados = isOffline ? {
-    temperatura_c: null, umidade_ar_pct: null, umidade_solo_pct: null, luminosidade_lux: null, bateria_pct: null, i2c_ok: false
-  } : { ...pontoSelecionado };
+function renderizarInterfaceCompleta() {
+  if (!appContainer) return;
 
-  if (bombaManualAtiva && !isOffline) {
-    dados.umidade_solo_pct = Math.min(100, parseFloat((dados.umidade_solo_pct + 12).toFixed(1)));
+  if (chartInstance) {
+    chartInstance.destroy();
+    chartInstance = null;
   }
 
-  appContainer.innerHTML = `
-    <div class="text-[11px] font-mono text-slate-500 select-none">
-      Telemetry Router: <span class="text-slate-300 font-bold text-xs">esp32-horta-01</span>
-    </div>
+  appContainer.innerHTML = gerarLayoutDashboard({
+    telemetriaAtual:      estadoApp.telemetriaAtual,
+    telemetriaAnterior:   estadoApp.telemetriaAnterior,
+    pontoSelecionado:     estadoApp.pontoSelecionado,
+    cenarioAtual:         estadoApp.cenarioAtual,
+    filtrosVisibilidade:  estadoApp.filtrosVisibilidade,
+    configAgrupamento:    estadoApp.configAgrupamento,
+    configData:           estadoApp.configData,
+    limitesData:          estadoApp.limitesData,
+    timestampInicio:      estadoApp.timestampInicio,
+    fetchedAt:              estadoApp.fetchedAt,
+    ultimoComando:        estadoApp.ultimoComando,
+    logErros:             estadoApp.logErros,
+    duracaoIrrigacaoSeg:  estadoApp.duracaoIrrigacaoSeg,
+  });
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-      
-      <div class="lg:col-span-2 space-y-5">
-        
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          ${renderCardSensor('Umid. Solo', dados.umidade_solo_pct, '%', cenarioAtual, dados.umidade_solo_pct <= 52 ? 'Solo Seco' : 'Úmido')}
-          ${renderCardSensor('Umid. Ar', dados.umidade_ar_pct, '%', cenarioAtual, dados.umidade_ar_pct < 40 ? 'Ar Seco' : 'Agradável')}
-          ${renderCardSensor('Temperatura', dados.temperatura_c, '°C', cenarioAtual, 'Agradável')}
-        </div>
+  const canvas = document.getElementById('analiseChart');
+  if (!canvas) return;
 
-        <div class="bg-[#0f172a] border border-slate-800/80 p-4 rounded-lg shadow-md space-y-3">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Tendências em tempo real</span>
-            
-            <div class="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs font-mono">
-              <span class="text-slate-500 px-1 font-bold text-[9px] uppercase tracking-wider">Janela:</span>
-              ${[0.5, 1, 6, 24].map(h => {
-                const label = h === 0.5 ? '30m' : `${h}h`;
-                return `
-                  <button data-horas="${h}" class="btn-periodo px-2 py-0.5 rounded font-bold transition-all ${filtroPeriodoHoras === h ? 'bg-blue-600 text-white shadow shadow-blue-500/20' : 'text-slate-400 hover:text-slate-200'}" >${label}</button>
-                `;
-              }).join('')}
-            </div>
-          </div>
-          <p class="text-[9px] font-mono text-slate-500 -mt-1">Gráfico multissérie | Eixo Y Esq: % | Eixo Y Dir: Lux</p>
-          <div class="h-52 w-full">
-            <canvas id="analiseChart"></canvas>
-          </div>
-        </div>
-      </div>
+  chartInstance = inicializarGraficoAnalitico(
+    canvas,
+    estadoApp.dadosGraficoTimelineAgrupados,
+    chartInstance,
+    (ponto) => { sincronizarPontoSelecionado(ponto); renderizarInterfaceCompleta(); }
+  );
 
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-5">
-        ${renderSidePanels(dados, cenarioAtual, bombaManualAtiva)}
-      </div>
-    </div>
+  if (chartInstance) {
+    chartInstance.data.datasets.forEach(ds => {
+      ds.hidden = !estadoApp.filtrosVisibilidade[ds.id];
+    });
+    chartInstance.update('none');
+  }
 
-    ${renderControlesTeste(cenarioAtual, simularErroConexao)}
-  `;
-
-  vincularEventos();
+  vincularEventosDashboard();
 }
 
-function inicializarGrafico(pontosDisponiveis) {
-  const ctx = document.getElementById('analiseChart');
-  if (!ctx) return;
-
-  chartInstance = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: pontosDisponiveis.map(p => p.horario),
-      datasets: [
-        {
-          label: 'Umid. Solo (%)',
-          data: pontosDisponiveis.map(p => p.umidade_solo_pct),
-          borderColor: '#34d399',
-          backgroundColor: 'transparent',
-          tension: 0.1,
-          yAxisID: 'yLeft',
-          pointRadius: pontosDisponiveis.length > 100 ? 0.5 : 2
-        },
-        {
-          label: 'Luz (Lux)',
-          data: pontosDisponiveis.map(p => (cenarioAtual === 'parcial' ? null : p.luminosidade_lux)),
-          borderColor: '#eab308',
-          backgroundColor: 'transparent',
-          borderDash: [3, 3],
-          tension: 0.1,
-          yAxisID: 'yRight',
-          pointRadius: pontosDisponiveis.length > 100 ? 0.5 : 2
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { display: false } },
-      onClick: (e, elements) => {
-        if (elements.length > 0) {
-          const index = elements[0].index;
-          pontoSelecionado = pontosDisponiveis[index];
-          processarCicloUI();
-        }
-      },
-      scales: {
-        x: { 
-          grid: { color: '#1e293b/40' }, 
-          ticks: { 
-            color: '#64748b', 
-            font: { size: 8, family: 'mono' },
-            callback: function(val, index) {
-              const modulo = filtroPeriodoHoras <= 1 ? 10 : 30;
-              return index % modulo === 0 ? this.getLabelForValue(val) : '';
-            }
-          } 
-        },
-        yLeft: { min: 20, max: 100, grid: { color: '#1e293b/40' }, ticks: { color: '#34d399', font: { size: 8 } } },
-        yRight: { min: 0, max: 10000, grid: { drawOnChartArea: false }, ticks: { color: '#eab308', font: { size: 8 } } }
+function vincularEventosDashboard() {
+  document.querySelectorAll('.chk-visibilidade').forEach(chk => {
+    chk.addEventListener('change', e => {
+      const id = e.target.getAttribute('data-series');
+      estadoApp.filtrosVisibilidade[id] = e.target.checked;
+      persistirSessaoLocal();
+      if (chartInstance) {
+        const ds = chartInstance.data.datasets.find(d => d.id === id);
+        if (ds) { ds.hidden = !e.target.checked; chartInstance.update(); }
       }
+    });
+  });
+
+  // Agrupamento temporal
+  document.getElementById('select-unidade-tempo')?.addEventListener('change', e => {
+    estadoApp.configAgrupamento.unidade = e.target.value;
+    persistirSessaoLocal();
+    processarAgrupamentoETempo();
+    renderizarInterfaceCompleta();
+  });
+
+  document.getElementById('input-fator-tempo')?.addEventListener('change', e => {
+    estadoApp.configAgrupamento.fator = Math.max(1, parseInt(e.target.value) || 1);
+    persistirSessaoLocal();
+    processarAgrupamentoETempo();
+    renderizarInterfaceCompleta();
+  });
+
+  document.getElementById('btn-aplicar-datas')?.addEventListener('click', () => {
+    // ISO 27001 A.14.2.5 — sanitizar entrada do usuário antes de usar
+    const ini = sanitizarEntradaData(document.getElementById('filtro-data-inicio')?.value);
+    const fim = sanitizarEntradaData(document.getElementById('filtro-data-fim')?.value);
+    if (!ini) return;
+    estadoApp.configData.inicio           = ini;
+    estadoApp.configData.fim              = fim || '';
+    estadoApp.configData.fimControleManual = !!(fim && fim !== '');
+    estadoApp.filtroDataAtivo             = true;
+    persistirSessaoLocal();
+    processarAgrupamentoETempo();
+    renderizarInterfaceCompleta();
+  });
+
+  document.getElementById('btn-limpar-datas')?.addEventListener('click', () => {
+    estadoApp.filtroDataAtivo              = false;
+    estadoApp.configData.inicio            = '';
+    estadoApp.configData.fim               = '';
+    estadoApp.configData.fimControleManual = false;
+    persistirSessaoLocal();
+    processarAgrupamentoETempo();
+    renderizarInterfaceCompleta();
+  });
+
+  // Passo 8 — Duração de irrigação configurável com sanitização (ISO 27002 8.2)
+  document.getElementById('select-duracao-irrigacao')?.addEventListener('change', e => {
+    estadoApp.duracaoIrrigacaoSeg = sanitizarDuracaoIrrigacao(e.target.value);
+    persistirSessaoLocal();
+  });
+
+  // Passo 7 — Botão de irrigação: registrar último comando
+  document.getElementById('btn-toggle-bomba')?.addEventListener('click', () => {
+    if (comandoBloqueado()) return;
+    const bombaAtiva = estadoApp.telemetriaAtual?.statusIrrigacao === 'LIGADO';
+    const cmd = bombaAtiva
+      ? 'Parar irrigação'
+      : `Iniciar irrigação (${estadoApp.duracaoIrrigacaoSeg}s)`;
+    estadoApp.ultimoComando = cmd;
+    adicionarLogErro('CMD', cmd);
+    renderizarInterfaceCompleta();
+  });
+}
+
+async function processarCicloDadosEUI() {
+  await atualizarEstadoDados();
+  if (!estadoApp.pontoSelecionado && estadoApp.telemetriaAtual) {
+    sincronizarPontoSelecionado(estadoApp.telemetriaAtual);
+  }
+  renderizarInterfaceCompleta();
+  // Atualiza navbar com cenário atual
+  if (navContainer) {
+    navContainer.innerHTML = renderNavbar(estadoApp.cenarioAtual);
+  }
+}
+
+function agendarProximaAtualizacao() {
+  if (agendadorTimeout) clearTimeout(agendadorTimeout);
+  const agora = new Date();
+  const msAteVirada = 60000 - (agora.getSeconds() * 1000 + agora.getMilliseconds());
+  agendadorTimeout = setTimeout(async () => {
+    if (!estadoApp.configData.fimControleManual) {
+      await processarCicloDadosEUI();
+    }
+    agendarProximaAtualizacao();
+  }, msAteVirada + 30000);
+}
+
+function vincularToggleTema() {
+  document.addEventListener('click', e => {
+    if (e.target.closest('#btn-toggle-tema')) {
+      document.documentElement.classList.toggle('dark');
+      localStorage.setItem('theme',
+        document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+      if (navContainer) {
+        navContainer.innerHTML = renderNavbar(estadoApp.cenarioAtual);
+      }
+      renderizarInterfaceCompleta();
     }
   });
 }
 
-function vincularEventos() {
-  const btnRetry = document.getElementById('btn-retry');
-  if (btnRetry) btnRetry.addEventListener('click', processarCicloUI);
+async function inicializarOrquestrador() {
+  restaurarSessaoLocal();
 
-  document.querySelectorAll('.btn-periodo').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      filtroPeriodoHoras = parseFloat(e.target.getAttribute('data-horas'));
-      processarCicloUI();
-    });
-  });
-
-  const btnBomba = document.getElementById('btn-toggle-bomba');
-  if (btnBomba) {
-    btnBomba.addEventListener('click', () => {
-      bombaManualAtiva = !bombaManualAtiva;
-      processarCicloUI();
-    });
+  if (navContainer) {
+    navContainer.innerHTML = renderNavbar(estadoApp.cenarioAtual);
   }
 
-  document.querySelectorAll('.btn-cenario').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      cenarioAtual = e.target.getAttribute('data-cenario');
-      simularErroConexao = false;
-      processarCicloUI();
-    });
-  });
-
-  const btnToggleError = document.getElementById('btn-toggle-error');
-  if (btnToggleError) {
-    btnToggleError.addEventListener('click', () => {
-      simularErroConexao = !simularErroConexao;
-      processarCicloUI();
-    });
+  const cached = await carregarCacheSnapshot();
+  if (cached) {
+    aplicarPayloadNoEstado(toCachedResponse(cached));
+    processarAgrupamentoETempo();
+    if (estadoApp.telemetriaAtual) {
+      sincronizarPontoSelecionado(estadoApp.telemetriaAtual);
+    }
+    renderizarInterfaceCompleta();
+    if (navContainer) {
+      navContainer.innerHTML = renderNavbar(estadoApp.cenarioAtual);
+    }
   }
+
+  vincularToggleTema();
+  await processarCicloDadosEUI();
+  agendarProximaAtualizacao();
 }
 
-function inicializarEngineRealtime() {
-  if (temporizadorRealtime) clearInterval(temporizadorRealtime);
-  temporizadorRealtime = setInterval(processarCicloUI, 120000); 
-}
-
-processarCicloUI();
-inicializarEngineRealtime();
+inicializarOrquestrador();
