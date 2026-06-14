@@ -1,8 +1,34 @@
 import { renderCardSensor, renderSidePanels } from './appRenderService.js';
+import {
+  calcularStatusUmidadeSolo,
+  calcularStatusUmidadeAr,
+  calcularStatusTemperatura,
+  calcularProgressBarPct,
+  calcularDelta,
+  formatarTimestamp,
+} from './cardHelpers.js';
 
+/**
+ * Gera o layout HTML completo do dashboard.
+ *
+ * @param {object} params
+ * @param {object|null} params.telemetriaAtual      - Dados da leitura mais recente.
+ * @param {object|null} params.telemetriaAnterior   - Dados da leitura anterior (para delta).
+ * @param {object|null} params.pontoSelecionado     - Ponto clicado no gráfico.
+ * @param {string}      params.cenarioAtual         - Estado da conexão.
+ * @param {object}      params.filtrosVisibilidade  - Visibilidade das séries do gráfico.
+ * @param {object}      params.configAgrupamento    - Agrupamento temporal.
+ * @param {object}      params.configData           - Filtros de data.
+ * @param {object}      params.limitesData          - Limites do histórico carregado.
+ * @param {number}      params.timestampInicio      - ms epoch do início da sessão (Passo 7).
+ * @param {string|null} params.ultimoComando        - Último comando enviado (Passo 7).
+ * @param {Array}       params.logErros             - Log acumulado de eventos (Passo 9).
+ * @param {number}      params.duracaoIrrigacaoSeg  - Duração configurável (Passo 8).
+ */
 export function gerarLayoutDashboard({
-  telemetriaAtual, pontoSelecionado, cenarioAtual,
-  filtrosVisibilidade, configAgrupamento, configData, limitesData
+  telemetriaAtual, telemetriaAnterior = null, pontoSelecionado, cenarioAtual,
+  filtrosVisibilidade, configAgrupamento, configData, limitesData,
+  timestampInicio = 0, ultimoComando = null, logErros = [], duracaoIrrigacaoSeg = 60,
 }) {
 
   const statusBadge = cenarioAtual === 'offline'
@@ -23,6 +49,7 @@ export function gerarLayoutDashboard({
     irrigacao_ativa:  telemetriaAtual?.statusIrrigacao === 'LIGADO' || telemetriaAtual?.statusIrrigacao === 'LIGADA',
     status_bomba_manual: telemetriaAtual?.controleManualAtivo ?? false,
     luz_pct:          pontoSelecionado?.luminosidade_lux ?? telemetriaAtual?.luzSolar ?? 0,
+    esta_chovendo:    telemetriaAtual?.estaChovendo ?? false,
   };
 
   const estacaoBruta = pontoSelecionado?.estacao    || telemetriaAtual?.estacao    || '---';
@@ -64,6 +91,40 @@ export function gerarLayoutDashboard({
         Luz Solar
       </span>
     </div>`;
+
+  // ─── Passo 2 — Status dinâmico por threshold ────────────────────────────────
+  const statusUmidSolo = calcularStatusUmidadeSolo(d.umidade_solo_pct);
+  const statusUmidAr   = calcularStatusUmidadeAr(d.umidade_ar_pct);
+  const statusTemp     = calcularStatusTemperatura(d.temperatura_c);
+
+  // ─── Passo 1 — Barra de progresso ────────────────────────────────────────────
+  const barUmidSolo = calcularProgressBarPct(d.umidade_solo_pct);
+  const barUmidAr   = calcularProgressBarPct(d.umidade_ar_pct);
+  const barTemp     = calcularProgressBarPct(d.temperatura_c, 0, 50);
+
+  // ─── Passo 4 — Delta / tendência ─────────────────────────────────────────────
+  const deltaUmidSolo = calcularDelta(
+    telemetriaAnterior?.umidadeSoloPorcentagem ?? null,
+    d.umidade_solo_pct
+  );
+  const deltaUmidAr = calcularDelta(
+    telemetriaAnterior?.umidadeAr ?? null,
+    d.umidade_ar_pct
+  );
+  const deltaTemp = calcularDelta(
+    telemetriaAnterior?.temperatura ?? null,
+    d.temperatura_c
+  );
+
+  // ─── Passo 3 — Timestamp de última leitura ───────────────────────────────────
+  const timestampLeitura = formatarTimestamp(telemetriaAtual?.dataHora ?? null);
+
+  // ─── Passo 5 — Badge de chuva / irrigação ────────────────────────────────────
+  const badgeUmidSolo = d.irrigacao_ativa
+    ? '💧 Irrigando'
+    : d.esta_chovendo
+      ? '🌧 Chuva detectada'
+      : null;
 
   return `
     <!-- Cabeçalho de status -->
@@ -192,12 +253,39 @@ export function gerarLayoutDashboard({
       ════════════════════════════════════════════════ -->
       <div class="grid grid-cols-1 lg:grid-cols-4 gap-5">
         <div class="lg:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          ${renderCardSensor('Umid. Solo', d.umidade_solo_pct, '%', cenarioAtual, d.umidade_solo_pct <= 55 ? 'Solo Seco' : 'Úmido', { icone: '🌱', corValor: 'text-emerald-600 dark:text-emerald-400', corBarra: 'bg-emerald-500' })}
-          ${renderCardSensor('Umid. Ar',   d.umidade_ar_pct,   '%', cenarioAtual, 'Agradável', { icone: '💧', corValor: 'text-sky-600 dark:text-sky-400', corBarra: 'bg-sky-500' })}
-          ${renderCardSensor('Temperatura',d.temperatura_c,    '°C',cenarioAtual, 'Estável', { icone: '🌡️', corValor: 'text-red-600 dark:text-red-400', corBarra: 'bg-red-500' })}
+          ${renderCardSensor(
+            'Umid. Solo',
+            d.umidade_solo_pct, '%',
+            cenarioAtual,
+            statusUmidSolo,
+            { icone: '🌱', corValor: 'text-emerald-600 dark:text-emerald-400', corBarra: 'bg-emerald-500' },
+            { timestamp: timestampLeitura, delta: deltaUmidSolo, showProgressBar: true, progressBarPct: barUmidSolo, badge: badgeUmidSolo }
+          )}
+          ${renderCardSensor(
+            'Umid. Ar',
+            d.umidade_ar_pct, '%',
+            cenarioAtual,
+            statusUmidAr,
+            { icone: '💧', corValor: 'text-sky-600 dark:text-sky-400', corBarra: 'bg-sky-500' },
+            { timestamp: timestampLeitura, delta: deltaUmidAr, showProgressBar: true, progressBarPct: barUmidAr }
+          )}
+          ${renderCardSensor(
+            'Temperatura',
+            d.temperatura_c, '°C',
+            cenarioAtual,
+            statusTemp,
+            { icone: '🌡️', corValor: 'text-red-600 dark:text-red-400', corBarra: 'bg-red-500' },
+            { timestamp: timestampLeitura, delta: deltaTemp, showProgressBar: true, progressBarPct: barTemp }
+          )}
         </div>
         <div class="grid grid-cols-1 gap-4">
-          ${renderSidePanels(d, cenarioAtual, d.status_bomba_manual)}
+          ${renderSidePanels(d, cenarioAtual, d.status_bomba_manual, {
+            timestampInicio: timestampInicio,
+            ultimoComando: ultimoComando,
+            logErros: logErros,
+            duracaoIrrigacaoSeg: duracaoIrrigacaoSeg,
+            opcoesDuracao: [30, 60, 120, 300],
+          })}
         </div>
       </div>
 

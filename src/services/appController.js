@@ -3,6 +3,7 @@ import { gerarLayoutDashboard } from './dashboardViewService.js';
 import { inicializarGraficoAnalitico } from './chartService.js';
 import { buscarDadosDispositivo } from './apiService.js';
 import { obterTelemetriaMockada, obterHistoricoMockado } from './mockService.js';
+import { sanitizarEntradaData, sanitizarDuracaoIrrigacao } from './cardHelpers.js';
 
 const JANELA_PADRAO_HORAS = 48;
 
@@ -21,14 +22,33 @@ let estadoApp = {
   },
   limitesData: { min: '', max: '' },
   telemetriaAtual: null,
+  telemetriaAnterior: null,          // Passo 4 — base para cálculo de delta
   dadosGraficoTimelineBrutos: [],
   dadosGraficoTimelineAgrupados: [],
-  pontoSelecionado: null
+  pontoSelecionado: null,
+  timestampInicio: Date.now(),        // Passo 7 — base para cálculo de uptime
+  ultimoComando: null,                // Passo 7 — último comando enviado
+  logErros: [],                       // Passo 9 — log acumulado (máx. 20 entradas)
+  duracaoIrrigacaoSeg: 60,            // Passo 8 — duração de irrigação configurável
 };
 
 let chartInstance = null;
 let agendadorTimeout = null;
 let estaCarregando = false;
+
+/**
+ * Passo 9 — Adiciona entrada ao log de erros/eventos acumulado.
+ * Mantém máximo de 20 entradas (mais recentes no topo).
+ * ISO 27002 8.16: rastreabilidade de ações no sistema.
+ *
+ * @param {'ERR'|'WARN'|'OK'|'CMD'} nivel
+ * @param {string} mensagem
+ */
+function adicionarLogErro(nivel, mensagem) {
+  const timestamp = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+  estadoApp.logErros.unshift({ nivel, mensagem, timestamp });
+  if (estadoApp.logErros.length > 20) estadoApp.logErros.pop();
+}
 
 const navContainer  = document.getElementById('nav-container');
 const appContainer  = document.getElementById('app-container');
@@ -71,12 +91,15 @@ async function atualizarEstadoDados() {
   try {
     const payload = await buscarDadosDispositivo();
 
+    // Passo 4 — salvar leitura anterior antes de sobrescrever
+    estadoApp.telemetriaAnterior    = estadoApp.telemetriaAtual;
+
     estadoApp.cenarioAtual          = payload.cenario || 'offline';
     estadoApp.telemetriaAtual       = payload.telemetria;
     estadoApp.dadosGraficoTimelineBrutos = payload.historico;
 
     if (!estadoApp.dadosGraficoTimelineBrutos?.length) {
-      console.warn('📊 Histórico vazio — usando mock local.');
+      adicionarLogErro('WARN', 'Histórico vazio — usando mock local');
       estadoApp.dadosGraficoTimelineBrutos = obterHistoricoMockado();
       estadoApp.cenarioAtual = 'offline';
     }
@@ -84,10 +107,11 @@ async function atualizarEstadoDados() {
       estadoApp.telemetriaAtual = obterTelemetriaMockada();
     }
 
-    console.log(`✅ ${estadoApp.dadosGraficoTimelineBrutos.length} registros | cenário: ${estadoApp.cenarioAtual}`);
+    adicionarLogErro('OK', `${estadoApp.dadosGraficoTimelineBrutos.length} registros | ${estadoApp.cenarioAtual}`);
 
   } catch (err) {
-    console.error('Erro no orquestrador:', err);
+    // Passo 9 — registrar erro no log acumulado
+    adicionarLogErro('ERR', `Falha na API: ${err.message}`);
     estadoApp.cenarioAtual               = 'offline';
     estadoApp.dadosGraficoTimelineBrutos = obterHistoricoMockado();
     estadoApp.telemetriaAtual            = obterTelemetriaMockada();
@@ -206,13 +230,18 @@ function renderizarInterfaceCompleta() {
   }
 
   appContainer.innerHTML = gerarLayoutDashboard({
-    telemetriaAtual:     estadoApp.telemetriaAtual,
-    pontoSelecionado:    estadoApp.pontoSelecionado,
-    cenarioAtual:        estadoApp.cenarioAtual,
-    filtrosVisibilidade: estadoApp.filtrosVisibilidade,
-    configAgrupamento:   estadoApp.configAgrupamento,
-    configData:          estadoApp.configData,
-    limitesData:         estadoApp.limitesData,
+    telemetriaAtual:      estadoApp.telemetriaAtual,
+    telemetriaAnterior:   estadoApp.telemetriaAnterior,
+    pontoSelecionado:     estadoApp.pontoSelecionado,
+    cenarioAtual:         estadoApp.cenarioAtual,
+    filtrosVisibilidade:  estadoApp.filtrosVisibilidade,
+    configAgrupamento:    estadoApp.configAgrupamento,
+    configData:           estadoApp.configData,
+    limitesData:          estadoApp.limitesData,
+    timestampInicio:      estadoApp.timestampInicio,
+    ultimoComando:        estadoApp.ultimoComando,
+    logErros:             estadoApp.logErros,
+    duracaoIrrigacaoSeg:  estadoApp.duracaoIrrigacaoSeg,
   });
 
   const canvas = document.getElementById('analiseChart');
@@ -261,8 +290,9 @@ function vincularEventosDashboard() {
   });
 
   document.getElementById('btn-aplicar-datas')?.addEventListener('click', () => {
-    const ini = document.getElementById('filtro-data-inicio')?.value?.trim();
-    const fim = document.getElementById('filtro-data-fim')?.value?.trim();
+    // ISO 27001 A.14.2.5 — sanitizar entrada do usuário antes de usar
+    const ini = sanitizarEntradaData(document.getElementById('filtro-data-inicio')?.value);
+    const fim = sanitizarEntradaData(document.getElementById('filtro-data-fim')?.value);
     if (!ini) return;
     estadoApp.configData.inicio           = ini;
     estadoApp.configData.fim              = fim || '';
@@ -278,6 +308,23 @@ function vincularEventosDashboard() {
     estadoApp.configData.fim               = '';
     estadoApp.configData.fimControleManual = false;
     processarAgrupamentoETempo();
+    renderizarInterfaceCompleta();
+  });
+
+  // Passo 8 — Duração de irrigação configurável com sanitização (ISO 27002 8.2)
+  document.getElementById('select-duracao-irrigacao')?.addEventListener('change', e => {
+    estadoApp.duracaoIrrigacaoSeg = sanitizarDuracaoIrrigacao(e.target.value);
+  });
+
+  // Passo 7 — Botão de irrigação: registrar último comando
+  document.getElementById('btn-toggle-bomba')?.addEventListener('click', () => {
+    if (estadoApp.cenarioAtual === 'offline') return;
+    const bombaAtiva = estadoApp.telemetriaAtual?.statusIrrigacao === 'LIGADO';
+    const cmd = bombaAtiva
+      ? 'Parar irrigação'
+      : `Iniciar irrigação (${estadoApp.duracaoIrrigacaoSeg}s)`;
+    estadoApp.ultimoComando = cmd;
+    adicionarLogErro('CMD', cmd);
     renderizarInterfaceCompleta();
   });
 }

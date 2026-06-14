@@ -17,7 +17,7 @@ async function fetchWithTimeout(resource, options = {}) {
   }
 }
 
-function normalizarRegistro(log) {
+export function normalizarRegistro(log) {
   const ca = log.condicoes_ambientais || {};
   const ss = log.sensores_solo || {};
   const at = log.atuadores || {};
@@ -29,8 +29,10 @@ function normalizarRegistro(log) {
     umidadeAr: ca.umidadeArPorcentagem ?? log.umidadeAr ?? 0,
     pHSolo: ss.pHSolo ?? log.pHSolo ?? 7.0,
     luzSolar: ca.luminosidadeSolarPorcentagem ?? log.luzSolar ?? 0,
-    statusIrrigacao: at.statusIrrigacao ?? (log.statusIrrigacao === 1 ? "LIGADO" : "DESLIGADO"),
-    estaChovendo: ca.estaChovendo ?? (log.estaChovendo === 1),
+    statusIrrigacao: at.statusIrrigacao ?? (
+      log.statusIrrigacao === 1 || log.statusIrrigacao === 'LIGADO' ? "LIGADO" : "DESLIGADO"
+    ),
+    estaChovendo: ca.estaChovendo ?? (log.estaChovendo === 1 || log.estaChovendo === true),
     vazaoGotejamentoLh: at.vazaoGotejamentoLh ?? (log.statusIrrigacao === 1 ? 2.0 : 0),
     controleManualAtivo: at.controleManualAtivo ?? false,
     estacao: ca.estacao ?? log.estacao ?? "---",

@@ -1,3 +1,20 @@
+import { formatarUptime, formatarDuracaoIrrigacao } from './cardHelpers.js';
+
+/**
+ * appRenderService.js
+ * Funções de renderização HTML para navbar, sensor cards e painéis laterais.
+ *
+ * Melhorias implementadas (passos 1–9 do plano):
+ *  Passo 1 — Barra de progresso visual nos sensor cards.
+ *  Passo 3 — Timestamp de última atualização nos cards.
+ *  Passo 4 — Indicador de tendência (delta ▲▼) nos cards.
+ *  Passo 5 — Badge de chuva / irrigação no card de Umidade Solo.
+ *  Passo 6 — Alertas corrigidos (sem "Reservatório" hardcoded).
+ *  Passo 7 — Uptime calculado e último comando real.
+ *  Passo 8 — Duração de irrigação configurável.
+ *  Passo 9 — Tabela de erros acumulada.
+ */
+
 export function renderNavbar(cenarioAtual) {
   const isOffline = cenarioAtual === 'offline';
   const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
@@ -34,12 +51,53 @@ export function renderNavbar(cenarioAtual) {
   `;
 }
 
-export function renderCardSensor(titulo, valor, unidade, estadoCard, descricaoStatus, accent = {}) {
+/**
+ * Renderiza um card de sensor.
+ *
+ * @param {string} titulo          - Nome do sensor.
+ * @param {number|null} valor      - Valor numérico lido.
+ * @param {string} unidade         - Ex: '%', '°C'.
+ * @param {string} estadoCard      - 'normal' | 'offline' | 'parcial' | 'pico' | 'render-live'.
+ * @param {string} descricaoStatus - Texto de status dinâmico (calculado externamente).
+ * @param {object} [accent={}]     - { icone, corValor, corBarra }.
+ * @param {object} [opcoes={}]     - Opções das melhorias:
+ *   - {string|null}  timestamp      - "HH:MM" da última leitura (Passo 3).
+ *   - {number|null}  delta          - Variação desde leitura anterior (Passo 4).
+ *   - {boolean}      showProgressBar- Exibir barra de progresso (Passo 1).
+ *   - {number}       progressBarPct - % de preenchimento da barra (Passo 1).
+ *   - {string|null}  badge          - Texto de badge contextual (Passo 5).
+ */
+export function renderCardSensor(titulo, valor, unidade, estadoCard, descricaoStatus, accent = {}, opcoes = {}) {
   const isOffline = estadoCard === 'offline';
   const isFalha = estadoCard === 'parcial' && (valor === null || valor === undefined);
   const icone = accent.icone || '📊';
   const corValor = accent.corValor || 'text-slate-900 dark:text-white';
   const corBarra = accent.corBarra || 'bg-slate-300 dark:bg-slate-700';
+
+  // Passo 3 — Timestamp
+  const timestamp = opcoes.timestamp || null;
+
+  // Passo 4 — Delta / tendência
+  const delta = (opcoes.delta !== null && opcoes.delta !== undefined) ? opcoes.delta : null;
+  const deltaNaoNulo = delta !== null && !isOffline && !isFalha;
+  const deltaHtml = deltaNaoNulo
+    ? `<span class="text-[9px] font-mono ${delta >= 0 ? 'text-emerald-500' : 'text-red-400'} leading-none">
+         ${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}
+       </span>`
+    : '';
+
+  // Passo 1 — Barra de progresso
+  const showProgressBar = opcoes.showProgressBar === true && !isOffline && !isFalha && valor !== null;
+  const progressBarPct = Math.min(100, Math.max(0, opcoes.progressBarPct ?? 0));
+  const progressBarHtml = showProgressBar
+    ? `<div class="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-1 mt-1.5">
+         <div class="${corBarra} h-1 rounded-full transition-all duration-500" style="width: ${progressBarPct}%"></div>
+       </div>`
+    : '';
+
+  // Passo 5 — Badge contextual (chuva / irrigação)
+  const badge = (!isOffline && !isFalha && opcoes.badge) ? opcoes.badge : null;
+  const statusTexto = isOffline ? 'Inacessivel' : isFalha ? 'Erro I2C' : (badge || descricaoStatus);
 
   return `
     <div class="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800/80 rounded-lg flex h-32 relative shadow-md overflow-hidden">
@@ -47,36 +105,86 @@ export function renderCardSensor(titulo, valor, unidade, estadoCard, descricaoSt
       <div class="flex flex-col justify-between p-4 flex-1 min-w-0">
         <div class="flex items-center justify-between">
           <span class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">${titulo}</span>
-          <span class="text-sm leading-none">${icone}</span>
+          <div class="flex items-center gap-1.5 shrink-0">
+            ${deltaHtml}
+            <span class="text-sm leading-none">${icone}</span>
+          </div>
         </div>
         <div class="my-1">
-          ${isOffline ? `<p class="text-xs text-slate-500 italic">Dispositivo Offline</p>` :
-            isFalha ? `<p class="text-xs font-bold text-amber-500">Falha no Sensor</p>` :
-            `<p class="text-3xl font-black ${corValor} tracking-tight font-mono leading-none">${valor}<span class="text-xs font-normal text-slate-400 ml-0.5">${unidade}</span></p>`
+          ${isOffline
+            ? `<p class="text-xs text-slate-500 italic">Dispositivo Offline</p>`
+            : isFalha
+              ? `<p class="text-xs font-bold text-amber-500">Falha no Sensor</p>`
+              : `<p class="text-3xl font-black ${corValor} tracking-tight font-mono leading-none">${valor}<span class="text-xs font-normal text-slate-400 ml-0.5">${unidade}</span></p>`
           }
+          ${progressBarHtml}
         </div>
-        <div class="text-[10px] text-slate-500 font-medium truncate">
-          "${isOffline ? 'Inacessível' : isFalha ? 'Erro I2C' : descricaoStatus}"
+        <div class="text-[10px] text-slate-500 font-medium flex items-center justify-between gap-1">
+          <span class="truncate">"${statusTexto}"</span>
+          ${timestamp ? `<span class="text-[9px] font-mono text-slate-400 shrink-0">${timestamp}</span>` : ''}
         </div>
       </div>
     </div>`;
 }
 
-export function renderSidePanels(dados, cenarioAtual, bombaManualAtiva) {
+/**
+ * Renderiza os 4 painéis laterais do dashboard.
+ *
+ * @param {object} dados            - Objeto com leituras do sensor atual.
+ * @param {string} cenarioAtual     - 'normal' | 'offline' | 'parcial' | 'render-live'.
+ * @param {boolean} bombaManualAtiva
+ * @param {object} [contexto={}]    - Dados de estado adicionais:
+ *   - {number}   timestampInicio    - ms desde epoch (Passo 7).
+ *   - {string|null} ultimoComando   - Último comando enviado (Passo 7).
+ *   - {Array}    logErros           - Log acumulado de eventos (Passo 9).
+ *   - {number}   duracaoIrrigacaoSeg- Duração configurável (Passo 8).
+ *   - {number[]} opcoesDuracao      - Opções disponíveis (Passo 8).
+ */
+export function renderSidePanels(dados, cenarioAtual, bombaManualAtiva, contexto = {}) {
   const isOffline = cenarioAtual === 'offline';
   const modoBombaAtivo = isOffline ? false : (dados.irrigacao_ativa || bombaManualAtiva);
 
+  // Passo 7 — Uptime calculado
+  const uptimeTexto = isOffline ? '0d 0h' : formatarUptime(contexto.timestampInicio ?? 0);
+  const ultimoComando = contexto.ultimoComando || 'Nenhum';
+
+  // Passo 8 — Duração de irrigação configurável
+  const duracaoAtual = contexto.duracaoIrrigacaoSeg ?? 60;
+  const opcoesDuracao = contexto.opcoesDuracao ?? [30, 60, 120, 300];
+  const opcoesHtml = opcoesDuracao.map(s =>
+    `<option value="${s}" ${s === duracaoAtual ? 'selected' : ''}>${formatarDuracaoIrrigacao(s)}</option>`
+  ).join('');
+
+  // Passo 9 — Log de erros acumulado
+  const logErros = Array.isArray(contexto.logErros) ? contexto.logErros : [];
+  const logHtml = logErros.length > 0
+    ? logErros.slice(0, 8).map(e => {
+        const cor = e.nivel === 'ERR' ? 'text-red-500' : e.nivel === 'WARN' ? 'text-yellow-500' : e.nivel === 'CMD' ? 'text-blue-400' : 'text-slate-500 dark:text-slate-600';
+        return `<p class="${cor}">[${e.nivel}] ${e.timestamp} ${e.mensagem}</p>`;
+      }).join('')
+    : isOffline
+      ? `<p class="text-red-500">[ERR] esp32 timeout disconnect</p>`
+      : cenarioAtual === 'parcial'
+        ? `<p class="text-yellow-500">[WARN] ldr barramento fallow</p>`
+        : `<p class="text-slate-500 dark:text-slate-600">[OK] mqtt broker connected</p>
+           <p class="text-slate-500 dark:text-slate-600">[OK] wifi RSSI -45dBm</p>`;
+
+  // Passo 6 — Alertas corrigidos (sem "Reservatório" hardcoded; adicionado alerta de temperatura)
+  const alertaUmidSoloBaixo = !isOffline && dados.umidade_solo_pct <= 52;
+  const alertaTemperaturaAlta = !isOffline && dados.temperatura_c > 35;
+
   return `
+    <!-- Passo 6 — Alertas -->
     <div class="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800/80 p-4 rounded-lg shadow-md space-y-3">
       <div class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">⚠️ Alertas</div>
       <div class="space-y-2 text-[11px] font-mono">
         <div class="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-900">
-          <span class="h-2 w-2 rounded-full ${!isOffline && dados.umidade_solo_pct <= 52 ? 'bg-yellow-500' : 'bg-slate-300 dark:bg-slate-800'}"></span>
-          <span class="${!isOffline && dados.umidade_solo_pct <= 52 ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400 dark:text-slate-600'}">Umid. solo baixa</span>
+          <span class="h-2 w-2 rounded-full ${alertaUmidSoloBaixo ? 'bg-yellow-500' : 'bg-slate-300 dark:bg-slate-800'}"></span>
+          <span class="${alertaUmidSoloBaixo ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400 dark:text-slate-600'}">Umid. solo baixa</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-900 text-slate-400 dark:text-slate-600">
-          <span class="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-800"></span>
-          <span>Reservatório crit.</span>
+        <div class="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-900">
+          <span class="h-2 w-2 rounded-full ${alertaTemperaturaAlta ? 'bg-red-500' : 'bg-slate-300 dark:bg-slate-800'}"></span>
+          <span class="${alertaTemperaturaAlta ? 'text-red-600 dark:text-red-400 font-bold' : 'text-slate-400 dark:text-slate-600'}">Temperatura elevada</span>
         </div>
         <div class="flex items-center gap-2 p-1.5 rounded bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-900 ${isOffline ? 'text-slate-400 dark:text-slate-600' : 'text-emerald-600 dark:text-emerald-500 font-bold'}">
           <span class="h-2 w-2 rounded-full ${isOffline ? 'bg-slate-300 dark:bg-slate-800' : 'bg-emerald-500'}"></span>
@@ -86,33 +194,54 @@ export function renderSidePanels(dados, cenarioAtual, bombaManualAtiva) {
       </div>
     </div>
 
+    <!-- Passo 9 — Tabela de erros acumulada -->
     <div class="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800/80 p-4 rounded-lg shadow-md flex flex-col justify-between h-36">
       <div class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Tabela de Erros (sistema)</div>
       <div class="bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-900 rounded p-2 h-20 overflow-y-auto font-mono text-[9px] text-slate-500 space-y-1">
-        ${isOffline ? `<p class="text-red-500">[ERR] esp32 timeout disconnect</p>` : 
-          cenarioAtual === 'parcial' ? `<p class="text-yellow-600">[WARN] ldr barramento fallow</p>` :
-          `<p class="text-slate-500 dark:text-slate-600">[OK] mqtt broker connected</p><p class="text-slate-500 dark:text-slate-600">[OK] wifi RSSI -45dBm</p>`
-        }
+        ${logHtml}
       </div>
     </div>
 
+    <!-- Passo 7 — Status dispositivo com uptime calculado e último comando -->
     <div class="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800/80 p-4 rounded-lg shadow-md text-[11px] font-mono space-y-1 text-slate-500 dark:text-slate-400">
       <div class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-sans mb-1">⚙️ Status Dispositivo</div>
-      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5"><span>Estado:</span><span class="text-slate-900 dark:text-white font-bold">${isOffline ? 'OFFLINE' : modoBombaAtivo ? 'IRRIGANDO' : 'IDLE'}</span></div>
-      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5"><span>Conexão:</span><span class="text-slate-700 dark:text-slate-300">${isOffline ? 'Offline' : 'Online'}</span></div>
-      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5"><span>MQTT:</span><span class="text-slate-700 dark:text-slate-300">${isOffline ? 'Desconectado' : 'Conectado'}</span></div>
-      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5"><span>Últ. cmd:</span><span class="text-slate-500">Nenhum</span></div>
-      <div class="flex justify-between"><span>Ligado há:</span><span class="text-slate-500">${isOffline ? '0d 0h' : '2d 4h'}</span></div>
+      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5">
+        <span>Estado:</span>
+        <span class="text-slate-900 dark:text-white font-bold">${isOffline ? 'OFFLINE' : modoBombaAtivo ? 'IRRIGANDO' : 'IDLE'}</span>
+      </div>
+      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5">
+        <span>Conexão:</span>
+        <span class="text-slate-700 dark:text-slate-300">${isOffline ? 'Offline' : 'Online'}</span>
+      </div>
+      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5">
+        <span>MQTT:</span>
+        <span class="text-slate-700 dark:text-slate-300">${isOffline ? 'Desconectado' : 'Conectado'}</span>
+      </div>
+      <div class="flex justify-between border-b border-slate-200 dark:border-slate-900 pb-0.5">
+        <span>Últ. cmd:</span>
+        <span class="text-slate-500 truncate max-w-[70%]" title="${ultimoComando}">${ultimoComando}</span>
+      </div>
+      <div class="flex justify-between">
+        <span>Ligado há:</span>
+        <span class="text-slate-500">${uptimeTexto}</span>
+      </div>
     </div>
 
+    <!-- Passo 8 — Ação rápida com duração configurável -->
     <div class="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800/80 p-4 rounded-lg shadow-md flex flex-col justify-between h-36">
       <div>
         <div class="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">💧 Ação Rápida</div>
-        <p class="text-[10px] text-slate-500">Duração: <span class="text-slate-700 dark:text-slate-300 font-mono">[60s]</span></p>
+        <div class="flex items-center gap-2 mt-1">
+          <span class="text-[10px] text-slate-500">Duração:</span>
+          <select id="select-duracao-irrigacao" ${isOffline ? 'disabled' : ''}
+            class="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded px-1 py-0.5 text-[10px] font-mono focus:outline-none disabled:opacity-30">
+            ${opcoesHtml}
+          </select>
+        </div>
       </div>
       <button id="btn-toggle-bomba" ${isOffline ? 'disabled' : ''} class="w-full py-1.5 rounded font-mono text-[11px] font-bold uppercase tracking-wider transition-all border ${
-        modoBombaAtivo 
-          ? 'bg-red-50 dark:bg-red-950 border-red-300 dark:border-red-700 text-red-600 dark:text-red-400' 
+        modoBombaAtivo
+          ? 'bg-red-50 dark:bg-red-950 border-red-300 dark:border-red-700 text-red-600 dark:text-red-400'
           : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-emerald-600 dark:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-900 disabled:opacity-20'
       }">
         [ ${modoBombaAtivo ? '■ Parar' : '► Iniciar'} ]
@@ -139,3 +268,4 @@ export function renderControlesTeste(cenarioAtual, simularErroConexao) {
       </div>
     </div>`;
 }
+
