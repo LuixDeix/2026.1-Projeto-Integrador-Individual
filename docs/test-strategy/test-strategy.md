@@ -324,6 +324,7 @@ Riscos frontend adicionados na entrega A1.8, ancorados na mesma estrutura da §1
 | 8 | UC-01 · Alertas dashboard | XSS via nome de canteiro renderizado sem escape | Unitário | `unit.canteiros.xss-sanitize` |
 | 9 | UC-01 · Fetch layer | Falha silenciosa quando API e cache indisponíveis — tela em branco | Unitário | `unit.api.failover-offline` |
 | 10 | UC-02 · Histórico | Paginação retorna página vazia sem estado `empty` — operador assume bug | Unitário | `unit.historico.empty-page` |
+| 11 | UC-02 · Histórico — export CSV | CSV/Formula Injection: `canteiroId` iniciado com `=`, `+`, `-` ou `@` (ex: `=cmd`, `=HYPERLINK(...)`) é interpretado como fórmula executável pelo Excel/Sheets ao abrir o arquivo exportado; `sanitizarTextoCanteiro`/`escapeHtml` (mitigação de A1) protegem o HTML, não o CSV | Unitário | `unit.historico.csv-formula-injection` |
 
 ### Rastreabilidade dashboard A1.8
 
@@ -333,6 +334,7 @@ Riscos frontend adicionados na entrega A1.8, ancorados na mesma estrutura da §1
 | `unit.canteiros.crud-validate` | Canteiros | `canteirosService.test.js` | #8 |
 | `unit.principal.alert-threshold-30` | Principal | `principalView.test.js` | #9 |
 | `unit.historico.csv-export` | Histórico | `principalView.test.js` | #10 |
+| `unit.historico.csv-formula-injection` | Histórico | `historicoView.test.js` | #11 |
 | `e2e.dashboard.critical-flow` | Fluxo E2E | `e2e/dashboard-flow.spec.js` | #9, #10 |
 
-Evidências de execução: `docs/dashboard/evidencias/test-unit-a18.log`, `test-e2e-a18.log`
+Evidências de execução: `docs/dashboard/evidencias/test-unit-a18.log`, `test-e2e-a18.log`, `test-unit-a5-csv-injection.log`
