@@ -1,5 +1,5 @@
 import { renderPageShell, renderEstadoLoading, renderEstadoErro, renderEstadoVazio } from '../services/uiStateService.js';
-import { escapeHtml } from '../services/cardHelpers.js';
+import { escapeHtml, sanitizarCelulaCsv } from '../services/cardHelpers.js';
 import { getCanteiros } from '../services/canteirosService.js';
 
 export function renderHistoricoView({ estado, leituras = [], paginacao = {}, filtros = {}, erro = null }) {
@@ -106,7 +106,7 @@ export function gerarCsvLeituras(leituras) {
     if (r.leituraSuspeita) flags.push('suspeito');
     return [
       r.dataHora,
-      r.canteiroId || 'A',
+      sanitizarCelulaCsv(r.canteiroId || 'A'),
       r.temperatura ?? '',
       r.umidadeAr ?? '',
       r.umidadeSoloPorcentagem ?? '',
