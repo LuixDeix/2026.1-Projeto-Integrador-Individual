@@ -56,6 +56,16 @@
 | **Mitigação aplicada** | Endpoints usam `https://`; deploy Vercel força HTTPS |
 | **Headers** | `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` em `vercel.json` |
 
+### A5 — CSV/Formula Injection no export do Histórico
+
+**Cenário:** o nome de um canteiro (`canteiroId`/`nome`), embora protegido contra XSS em HTML por `sanitizarTextoCanteiro()` e `escapeHtml()`, não passava por nenhum tratamento ao ser gravado no CSV gerado por `gerarCsvLeituras()` (`historicoView.js`). Um nome iniciado com `=`, `+`, `-` ou `@` — por exemplo `=cmd|'/C calc'!A1` ou `=HYPERLINK("http://evil.tld")` — é interpretado como fórmula executável pelo Excel, Google Sheets e LibreOffice quando a coordenadora abre o arquivo exportado, podendo levar à execução de comandos ou abertura de links maliciosos na máquina dela. Esse vetor é distinto de A1: a injeção ocorre na planilha que consome o arquivo, não no navegador.
+
+| | |
+|---|---|
+| **Mitigação aplicada** | `sanitizarCelulaCsv()` (`cardHelpers.js`), aplicada ao campo `canteiroId` em `gerarCsvLeituras()`: quando o valor é texto e o primeiro caractere é `=`, `+`, `-` ou `@`, prefixa com apóstrofo (`'`), fazendo a planilha tratar a célula como texto literal. Valores numéricos (incluindo negativos, ex. `-3.2`) não são afetados — a verificação de tipo precede a inspeção de caractere |
+| **Evidência** | `src/__tests__/historicoView.test.js` — suites `historicoView CSV — formula injection (ameaça A5)` e `sanitizarCelulaCsv (unidade isolada)`: cobre neutralização de `=cmd(...)` e `=HYPERLINK(...)`, preservação de `25.5` e `-3.2`, e regressão do contrato existente (`,A,`) |
+| **Escopo da correção** | `downloadCsv()` não foi alterada — não realiza nenhum tratamento de dado, apenas serializa a string já sanitizada em `Blob`; o ponto de entrada da injeção está integralmente em `gerarCsvLeituras()` |
+
 ---
 
 ## 3. Dívida técnica registrada
@@ -75,3 +85,5 @@ Execução: `npm audit --audit-level=moderate` em 14/06/2026.
 Resultado salvo em: [`evidencias/npm-audit-a18.txt`](evidencias/npm-audit-a18.txt)
 
 Dependências diretas: Jest, Babel (dev only). Superfície de ataque em produção limitada a assets estáticos servidos pela Vercel.
+
+**Atualização (ameaça A5):** nova execução de `npm audit --audit-level=moderate` em 23/06/2026, sem novas dependências de produção introduzidas pela correção — `sanitizarCelulaCsv()` é função pura sem dependências externas. Resultado salvo em [`evidencias/npm-audit-a5.txt`](evidencias/npm-audit-a5.txt).
