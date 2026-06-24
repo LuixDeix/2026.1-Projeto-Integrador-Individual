@@ -219,6 +219,30 @@ export function sanitizarTextoCanteiro(valor) {
     .trim();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Segurança — Ameaça A5 (docs/dashboard/threat-model.md)
+// Neutralização de CSV/Formula Injection no export do Histórico
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Neutraliza CSV/Formula Injection (também conhecido como "CSV injection" ou
+ * "Excel formula injection" — CWE-1236 / OWASP).
+
+ * @param {*} valor - Valor a ser inserido numa célula do CSV.
+ * @returns {*} Valor original (se número ou texto seguro) ou string prefixada
+ *   com apóstrofo (se texto começando com caractere de fórmula).
+ */
+const GATILHOS_FORMULA_CSV = ['=', '+', '-', '@'];
+
+export function sanitizarCelulaCsv(valor) {
+  if (typeof valor !== 'string') return valor;
+  if (valor.length === 0) return valor;
+  if (GATILHOS_FORMULA_CSV.includes(valor[0])) {
+    return `'${valor}`;
+  }
+  return valor;
+}
+
 /**
  * Valida payload de canteiro para CRUD.
  * @param {object} dados
