@@ -86,4 +86,4 @@ Resultado salvo em: [`evidencias/npm-audit-a18.txt`](evidencias/npm-audit-a18.tx
 
 Dependências diretas: Jest, Babel (dev only). Superfície de ataque em produção limitada a assets estáticos servidos pela Vercel.
 
-**Atualização (ameaça A5):** nova execução de `npm audit --audit-level=moderate` em 23/06/2026, sem novas dependências de produção introduzidas pela correção — `sanitizarCelulaCsv()` é função pura sem dependências externas. Resultado salvo em [`evidencias/npm-audit-a5.txt`](evidencias/npm-audit-a5.txt).
+**Atualização (ameaça A5):** nova execução de `npm audit --audit-level=moderate` em 25/06/2026, sem novas dependências de produção introduzidas pela correção — `sanitizarCelulaCsv()` é função pura sem dependências externas. Resultado salvo em [`evidencias/npm-audit-a5.txt`](evidencias/npm-audit-a5.txt).

@@ -1,0 +1,39 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+No linha:1 caractere:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+> phorta-dashboard@0.2.0 test
+> jest historicoView.test.js
+
+PASS src/__tests__/historicoView.test.js (10.626 s)
+  historicoView CSV ÔÇö formula injection (amea├ºa A5)
+    ÔêÜ canteiroId iniciado com "=" ├® neutralizado com prefixo de ap├│strofo (4 ms)
+    ÔêÜ canteiroId com HYPERLINK maliciosa ├® neutralizada (1 ms)
+    ÔêÜ valor num├®rico leg├¡timo (25.5) permanece intacto, sem prefixo
+    ÔêÜ temperatura negativa leg├¡tima (ex: -3.2┬░C) n├úo ├® confundida com f├│rmula
+    ÔêÜ canteiroId normal (sem caractere de f├│rmula) n├úo ├® alterado ÔÇö regress├úo (1 ms)
+  sanitizarCelulaCsv (unidade isolada)
+    ÔêÜ prefixa =cmd com ap├│strofo
+    ÔêÜ prefixa +1+1 com ap├│strofo
+    ÔêÜ prefixa -cmd com ap├│strofo
+    ÔêÜ prefixa @SUM(A1) com ap├│strofo
+    ÔêÜ n├úo prefixa texto comum
+    ÔêÜ n├úo prefixa string vazia
+    ÔêÜ n├úo altera n├║meros (incluindo negativos)
+    ÔêÜ repassa null/undefined sem lan├ºar erro (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       13 passed, 13 total
+Snapshots:   0 total
+Time:        29.817 s
+Ran all test suites matching /historicoView.test.js/i.
+npm notice
+npm notice New minor version of npm available! 11.16.0 -> 11.17.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.17.0
+npm notice To update run: npm install -g npm@11.17.0
+npm notice
